@@ -1,0 +1,548 @@
+/* ─── Sidebar Layout ─────────────────────────────────────────────────────── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  min-width: 220px;
+  max-width: 320px;
+  height: 100vh;
+  background: #1a1b23;
+  border-right: 1px solid #2e303a;
+  color: #e2e4ed;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+
+/* ─── Header ─────────────────────────────────────────────────────────────── */
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid #2e303a;
+  gap: 6px;
+}
+
+.sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #c8cad8;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* ─── Icon Buttons ───────────────────────────────────────────────────────── */
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3b0;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.icon-btn:hover {
+  background: #2b2d3a;
+  color: #e2e4ed;
+}
+
+.icon-btn.active {
+  background: #2b2d3a;
+  color: #a78bfa;
+}
+
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ─── Search ─────────────────────────────────────────────────────────────── */
+
+.sidebar-search {
+  padding: 8px 10px;
+  border-bottom: 1px solid #2e303a;
+}
+
+.sidebar-search input {
+  width: 100%;
+  background: #12131a;
+  border: 1px solid #2e303a;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #e2e4ed;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.sidebar-search input::placeholder {
+  color: #6b7280;
+}
+
+.sidebar-search input:focus {
+  border-color: #7c3aed;
+}
+
+/* ─── Tree Area ──────────────────────────────────────────────────────────── */
+
+.sidebar-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.sidebar-tree::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-tree::-webkit-scrollbar-thumb {
+  background: #3a3c4a;
+  border-radius: 4px;
+}
+
+/* ─── Empty State ────────────────────────────────────────────────────────── */
+
+.sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 20px;
+  color: #6b7280;
+  text-align: center;
+  font-size: 12px;
+}
+
+.sidebar-empty svg {
+  opacity: 0.4;
+}
+
+/* ─── Folder Row ─────────────────────────────────────────────────────────── */
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 4px;
+  transition: background 0.12s;
+  user-select: none;
+}
+
+.folder-row:hover {
+  background: #22243080;
+}
+
+.folder-row.selected {
+  background: #2b2d3a;
+}
+
+.folder-chevron {
+  width: 14px;
+  height: 14px;
+  color: #6b7280;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.folder-chevron.open {
+  transform: rotate(90deg);
+}
+
+.folder-icon {
+  width: 15px;
+  height: 15px;
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8cad8;
+  font-weight: 500;
+}
+
+.folder-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.folder-row:hover .folder-actions,
+.folder-row.selected .folder-actions {
+  display: flex;
+}
+
+/* ─── Drawing Row ────────────────────────────────────────────────────────── */
+
+.drawing-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 28px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 4px;
+  transition: background 0.12s;
+  user-select: none;
+}
+
+.drawing-row.root-level {
+  padding-left: 10px;
+}
+
+.drawing-row:hover {
+  background: #22243080;
+}
+
+.drawing-row.active {
+  background: #3b1f6e55;
+  border: 1px solid #7c3aed44;
+}
+
+.drawing-icon {
+  width: 14px;
+  height: 14px;
+  color: #818cf8;
+  flex-shrink: 0;
+}
+
+.drawing-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8cad8;
+}
+
+.drawing-date {
+  font-size: 10px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.drawing-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.drawing-row:hover .drawing-actions,
+.drawing-row.active .drawing-actions {
+  display: flex;
+}
+
+/* ─── Inline Rename Input ────────────────────────────────────────────────── */
+
+.inline-input {
+  flex: 1;
+  background: #12131a;
+  border: 1px solid #7c3aed;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: #e2e4ed;
+  font-size: 12px;
+  outline: none;
+  min-width: 0;
+}
+
+/* ─── Context Menu ───────────────────────────────────────────────────────── */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #1f2130;
+  border: 1px solid #3a3c4a;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  min-width: 160px;
+  padding: 4px;
+  animation: ctx-appear 0.1s ease;
+}
+
+@keyframes ctx-appear {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #c8cad8;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.ctx-menu button:hover {
+  background: #2b2d3a;
+}
+
+.ctx-menu button.danger {
+  color: #f87171;
+}
+
+.ctx-menu button.danger:hover {
+  background: #3b1a1a;
+}
+
+.ctx-menu .ctx-sep {
+  height: 1px;
+  background: #2e303a;
+  margin: 4px 0;
+}
+
+/* ─── Modal / Dialog ─────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: #1a1b23;
+  border: 1px solid #3a3c4a;
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 320px;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  animation: modal-appear 0.15s ease;
+}
+
+@keyframes modal-appear {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal h3 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  color: #e2e4ed;
+  font-weight: 600;
+}
+
+.modal input {
+  width: 100%;
+  background: #12131a;
+  border: 1px solid #3a3c4a;
+  border-radius: 7px;
+  padding: 8px 12px;
+  color: #e2e4ed;
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 16px;
+}
+
+.modal input:focus {
+  border-color: #7c3aed;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: #6d28d9;
+}
+
+.btn-secondary {
+  background: #2b2d3a;
+  color: #c8cad8;
+  border: 1px solid #3a3c4a;
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-secondary:hover {
+  background: #33354a;
+}
+
+/* ─── Status Bar ─────────────────────────────────────────────────────────── */
+
+.sidebar-status {
+  padding: 8px 12px;
+  border-top: 1px solid #2e303a;
+  font-size: 11px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  flex-shrink: 0;
+}
+
+.status-dot.saving {
+  background: #f59e0b;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ─── Collapse toggle (outside sidebar) ─────────────────────────────────── */
+
+.sidebar-toggle {
+  position: fixed;
+  left: 260px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 11;
+  width: 18px;
+  height: 44px;
+  background: #2b2d3a;
+  border: 1px solid #3a3c4a;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3b0;
+  transition: background 0.15s, left 0.25s;
+}
+
+.sidebar-toggle:hover {
+  background: #3a3c4a;
+  color: #e2e4ed;
+}
+
+.sidebar-toggle.collapsed {
+  left: 0;
+}
+
+.sidebar-toggle svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* ─── Collapsed sidebar ──────────────────────────────────────────────────── */
+
+.sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+  overflow: hidden;
+}
+
+/* ─── App wrapper ────────────────────────────────────────────────────────── */
+
+.app-wrapper {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.canvas-area {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  position: relative;
+}
+
+/* ─── Move to folder select in modal ────────────────────────────────────── */
+
+.modal select {
+  width: 100%;
+  background: #12131a;
+  border: 1px solid #3a3c4a;
+  border-radius: 7px;
+  padding: 8px 12px;
+  color: #e2e4ed;
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 16px;
+  appearance: none;
+}
+
+.modal select:focus {
+  border-color: #7c3aed;
+}
+
+/* ─── Tooltip ────────────────────────────────────────────────────────────── */
+
+[title] {
+  position: relative;
+}
+
+/* ─── Unsaved indicator ──────────────────────────────────────────────────── */
+
+.unsaved-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f59e0b;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
