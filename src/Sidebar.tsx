@@ -13,6 +13,10 @@ import {
   deleteDrawing,
   moveDrawing,
   formatDate,
+  isDrawingNameTaken,
+  isFolderNameTaken,
+  getUniqueDrawingName,
+  getUniqueFolderName,
 } from "./db";
 
 // ─── SVG Icons (inline, no extra dep) ────────────────────────────────────────
@@ -89,7 +93,7 @@ function IconTrash() {
 function IconEdit() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M11 4H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
   );
@@ -104,6 +108,30 @@ function IconMove() {
       <polyline points="19 9 22 12 19 15" />
       <line x1="2" y1="12" x2="22" y2="12" />
       <line x1="12" y1="2" x2="12" y2="22" />
+    </svg>
+  );
+}
+
+function IconSun() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="23" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      <line x1="1" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="12" x2="23" y2="12" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    </svg>
+  );
+}
+
+function IconMoon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
     </svg>
   );
 }
@@ -129,9 +157,12 @@ interface ModalState {
 interface SidebarProps {
   activeDrawingId: string | null;
   onSelectDrawing: (drawing: Drawing) => void;
+  onActiveDrawingDeleted?: () => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
   saving?: boolean;
+  theme?: "dark" | "light";
+  onToggleTheme?: () => void;
 }
 
 // ─── Context Menu Component ───────────────────────────────────────────────────
@@ -213,17 +244,32 @@ function Modal({
   modal: ModalState;
   folders: Folder[];
   onClose: () => void;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string) => Promise<string | null | void>;
 }) {
   const [value, setValue] = useState(modal.defaultValue ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null);
 
   useEffect(() => {
     setTimeout(() => (inputRef.current as HTMLElement)?.focus(), 50);
   }, []);
 
+  const handleSubmit = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const err = await onSubmit(value);
+      if (err) {
+        setError(err);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") onSubmit(value);
+    if (e.key === "Enter") handleSubmit();
     if (e.key === "Escape") onClose();
   };
 
@@ -232,10 +278,10 @@ function Modal({
       <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
         <div className="modal">
           <h3>Confirm Delete</h3>
-          <p style={{ color: "#9ca3b0", fontSize: 13, marginBottom: 20, lineHeight: 1.5 }}>{modal.message}</p>
+          <p className="modal-description">{modal.message}</p>
           <div className="modal-actions">
             <button className="btn-secondary" onClick={onClose}>Cancel</button>
-            <button className="btn-primary" style={{ background: "#dc2626" }} onClick={() => modal.onConfirm?.()}>Delete</button>
+            <button className="btn-danger" onClick={() => modal.onConfirm?.()}>Delete</button>
           </div>
         </div>
       </div>
@@ -250,16 +296,21 @@ function Modal({
           <select
             ref={inputRef as React.RefObject<HTMLSelectElement>}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            className={error ? "input-error" : ""}
+            onChange={(e) => {
+              setValue(e.target.value);
+              if (error) setError(null);
+            }}
           >
             <option value="">— Root (no folder) —</option>
             {folders.map((f) => (
               <option key={f.id} value={f.id}>{f.name}</option>
             ))}
           </select>
+          {error && <div className="modal-error">{error}</div>}
           <div className="modal-actions">
             <button className="btn-secondary" onClick={onClose}>Cancel</button>
-            <button className="btn-primary" onClick={() => onSubmit(value)}>Move</button>
+            <button className="btn-primary" disabled={submitting} onClick={handleSubmit}>Move</button>
           </div>
         </div>
       </div>
@@ -280,13 +331,18 @@ function Modal({
         <input
           ref={inputRef as React.RefObject<HTMLInputElement>}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          className={error ? "input-error" : ""}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (error) setError(null);
+          }}
           onKeyDown={handleKey}
           placeholder={modal.kind.includes("folder") ? "Folder name" : "Drawing name"}
         />
+        {error && <div className="modal-error">{error}</div>}
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={() => onSubmit(value)}>
+          <button className="btn-primary" disabled={submitting} onClick={handleSubmit}>
             {modal.kind.startsWith("rename") ? "Rename" : "Create"}
           </button>
         </div>
@@ -300,9 +356,12 @@ function Modal({
 export default function Sidebar({
   activeDrawingId,
   onSelectDrawing,
+  onActiveDrawingDeleted,
   collapsed,
   onToggleCollapse,
   saving = false,
+  theme = "dark",
+  onToggleTheme,
 }: SidebarProps) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
@@ -312,6 +371,13 @@ export default function Sidebar({
   const [search, setSearch] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const reload = useCallback(async () => {
     const [f, d] = await Promise.all([getAllFolders(), getAllDrawings()]);
@@ -344,11 +410,15 @@ export default function Sidebar({
   const handleDeleteFolder = (id: string) => {
     const f = folders.find((x) => x.id === id);
     const count = drawings.filter((d) => d.folderId === id).length;
+    const containsActive = drawings.some((d) => d.folderId === id && d.id === activeDrawingId);
     setModal({
       kind: "confirm-delete",
       message: `Delete folder "${f?.name}"? This will also delete ${count} drawing(s) inside it. This cannot be undone.`,
       onConfirm: async () => {
         await deleteFolder(id);
+        if (containsActive) {
+          onActiveDrawingDeleted?.();
+        }
         setModal(null);
         reload();
       },
@@ -369,6 +439,9 @@ export default function Sidebar({
       message: `Delete drawing "${d?.name}"? This cannot be undone.`,
       onConfirm: async () => {
         await deleteDrawing(id);
+        if (activeDrawingId === id) {
+          onActiveDrawingDeleted?.();
+        }
         setModal(null);
         reload();
       },
@@ -378,37 +451,87 @@ export default function Sidebar({
   const handleMoveDrawing = (id: string) =>
     setModal({ kind: "move-drawing", id, defaultValue: drawings.find((d) => d.id === id)?.folderId ?? "" });
 
-  // ─── Modal submit ───────────────────────────────────────────────────────
+  // ─── Modal submit with duplicate prevention ─────────────────────────────
 
-  const handleModalSubmit = async (value: string) => {
+  const handleModalSubmit = async (value: string): Promise<string | null | void> => {
     if (!modal) return;
-    switch (modal.kind) {
-      case "new-folder":
-        await createFolder(value || "Untitled Folder");
-        break;
-      case "new-drawing": {
-        const d = await createDrawing(value || "Untitled Drawing", modal.folderId ?? null);
-        await reload();
-        setModal(null);
-        onSelectDrawing(d);
-        if (modal.folderId) setOpenFolders((prev) => new Set([...prev, modal.folderId!]));
-        return;
+    const trimmed = value.trim();
+
+    try {
+      switch (modal.kind) {
+        case "new-folder": {
+          const folderName = trimmed || getUniqueFolderName("Untitled Folder", folders);
+          if (isFolderNameTaken(folderName, folders)) {
+            return `A folder named "${folderName}" already exists.`;
+          }
+          await createFolder(folderName);
+          break;
+        }
+        case "new-drawing": {
+          const targetFolderId = modal.folderId ?? null;
+          const drawingName = trimmed || getUniqueDrawingName("Untitled Drawing", targetFolderId, drawings);
+          if (isDrawingNameTaken(drawingName, targetFolderId, drawings)) {
+            return `A drawing named "${drawingName}" already exists in ${targetFolderId ? "this folder" : "root"}.`;
+          }
+          const d = await createDrawing(drawingName, targetFolderId);
+          await reload();
+          setModal(null);
+          onSelectDrawing(d);
+          if (modal.folderId) setOpenFolders((prev) => new Set([...prev, modal.folderId!]));
+          return;
+        }
+        case "rename-folder": {
+          if (!modal.id) return;
+          if (!trimmed) {
+            return "Folder name cannot be empty.";
+          }
+          if (isFolderNameTaken(trimmed, folders, modal.id)) {
+            return `A folder named "${trimmed}" already exists.`;
+          }
+          await renameFolder(modal.id, trimmed);
+          break;
+        }
+        case "rename-drawing": {
+          if (!modal.id) return;
+          if (!trimmed) {
+            return "Drawing name cannot be empty.";
+          }
+          const current = drawings.find((d) => d.id === modal.id);
+          const folderId = current?.folderId ?? null;
+          if (isDrawingNameTaken(trimmed, folderId, drawings, modal.id)) {
+            return `A drawing named "${trimmed}" already exists in ${folderId ? "this folder" : "root"}.`;
+          }
+          await renameDrawing(modal.id, trimmed);
+          break;
+        }
+        case "move-drawing": {
+          if (!modal.id) return;
+          const targetFolderId = value ? value : null;
+          const current = drawings.find((d) => d.id === modal.id);
+          if (!current) return;
+          if (current.folderId === targetFolderId) {
+            setModal(null);
+            return;
+          }
+          if (isDrawingNameTaken(current.name, targetFolderId, drawings, modal.id)) {
+            const folderName = targetFolderId ? folders.find((f) => f.id === targetFolderId)?.name || "the folder" : "root";
+            return `A drawing named "${current.name}" already exists in ${folderName}.`;
+          }
+          await moveDrawing(modal.id, targetFolderId);
+          break;
+        }
       }
-      case "rename-folder":
-        if (modal.id) await renameFolder(modal.id, value);
-        break;
-      case "rename-drawing":
-        if (modal.id) await renameDrawing(modal.id, value);
-        break;
-      case "move-drawing":
-        if (modal.id) await moveDrawing(modal.id, value || null);
-        break;
+      setModal(null);
+      await reload();
+    } catch (err) {
+      if (err instanceof Error) {
+        return err.message;
+      }
+      return "An unexpected error occurred.";
     }
-    setModal(null);
-    reload();
   };
 
-  // ─── Inline rename ──────────────────────────────────────────────────────
+  // ─── Inline rename with duplicate prevention ────────────────────────────
 
   const startInlineRename = (e: React.MouseEvent, id: string, currentName: string) => {
     e.stopPropagation();
@@ -417,9 +540,36 @@ export default function Sidebar({
   };
 
   const commitInlineRename = async (kind: "folder" | "drawing") => {
-    if (!renamingId || !renameValue.trim()) { setRenamingId(null); return; }
-    if (kind === "folder") await renameFolder(renamingId, renameValue);
-    else await renameDrawing(renamingId, renameValue);
+    if (!renamingId || !renameValue.trim()) {
+      setRenamingId(null);
+      return;
+    }
+    const trimmed = renameValue.trim();
+    if (kind === "folder") {
+      if (isFolderNameTaken(trimmed, folders, renamingId)) {
+        setToast(`A folder named "${trimmed}" already exists.`);
+        setRenamingId(null);
+        return;
+      }
+      try {
+        await renameFolder(renamingId, trimmed);
+      } catch (err) {
+        setToast(err instanceof Error ? err.message : "Rename failed");
+      }
+    } else {
+      const current = drawings.find((d) => d.id === renamingId);
+      const folderId = current?.folderId ?? null;
+      if (isDrawingNameTaken(trimmed, folderId, drawings, renamingId)) {
+        setToast(`A drawing named "${trimmed}" already exists in ${folderId ? "this folder" : "root"}.`);
+        setRenamingId(null);
+        return;
+      }
+      try {
+        await renameDrawing(renamingId, trimmed);
+      } catch (err) {
+        setToast(err instanceof Error ? err.message : "Rename failed");
+      }
+    }
     setRenamingId(null);
     reload();
   };
@@ -449,7 +599,7 @@ export default function Sidebar({
         className={`sidebar-toggle${collapsed ? " collapsed" : ""}`}
         onClick={onToggleCollapse}
         title={collapsed ? "Show sidebar" : "Hide sidebar"}
-        style={{ left: collapsed ? 0 : 260 }}
+        style={{ left: collapsed ? 0 : 270 }}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
           {collapsed ? (
@@ -465,6 +615,15 @@ export default function Sidebar({
         <div className="sidebar-header">
           <span className="sidebar-title">Drawings</span>
           <div className="sidebar-header-actions">
+            {onToggleTheme && (
+              <button
+                className="icon-btn"
+                onClick={onToggleTheme}
+                title={theme === "dark" ? "Switch to white/light theme" : "Switch to dark theme"}
+              >
+                {theme === "dark" ? <IconSun /> : <IconMoon />}
+              </button>
+            )}
             <button className="icon-btn" onClick={handleNewFolder} title="New folder">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -549,6 +708,10 @@ export default function Sidebar({
                         <span className="folder-name">{folder.name}</span>
                       )}
 
+                      {!isRenaming && (
+                        <span className="folder-count">{folderDrawings.length}</span>
+                      )}
+
                       <span className="folder-actions">
                         <button
                           className="icon-btn"
@@ -574,26 +737,28 @@ export default function Sidebar({
                       </span>
                     </div>
 
-                    {isOpen &&
-                      folderDrawings.map((drawing) => (
-                        <DrawingRow
-                          key={drawing.id}
-                          drawing={drawing}
-                          active={drawing.id === activeDrawingId}
-                          renamingId={renamingId}
-                          renameValue={renameValue}
-                          setRenameValue={setRenameValue}
-                          onSelect={() => onSelectDrawing(drawing)}
-                          onCtx={(e) => openCtx(e, "drawing", drawing.id)}
-                          onRename={(e) => startInlineRename(e, drawing.id, drawing.name)}
-                          onCommitRename={() => commitInlineRename("drawing")}
-                          onCancelRename={() => setRenamingId(null)}
-                        />
-                      ))}
-
-                    {isOpen && folderDrawings.length === 0 && (
-                      <div style={{ paddingLeft: 36, paddingBottom: 4, color: "#6b7280", fontSize: 11 }}>
-                        Empty folder
+                    {isOpen && (
+                      <div className="folder-children">
+                        {folderDrawings.map((drawing) => (
+                          <DrawingRow
+                            key={drawing.id}
+                            drawing={drawing}
+                            active={drawing.id === activeDrawingId}
+                            renamingId={renamingId}
+                            renameValue={renameValue}
+                            setRenameValue={setRenameValue}
+                            onSelect={() => onSelectDrawing(drawing)}
+                            onCtx={(e) => openCtx(e, "drawing", drawing.id)}
+                            onRename={(e) => startInlineRename(e, drawing.id, drawing.name)}
+                            onCommitRename={() => commitInlineRename("drawing")}
+                            onCancelRename={() => setRenamingId(null)}
+                          />
+                        ))}
+                        {folderDrawings.length === 0 && (
+                          <div className="folder-empty">
+                            Empty folder
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -604,7 +769,7 @@ export default function Sidebar({
               {rootDrawings.length > 0 && (
                 <>
                   {filteredFolders.length > 0 && (
-                    <div style={{ height: 1, background: "#2e303a", margin: "6px 10px" }} />
+                    <div className="sidebar-divider" />
                   )}
                   {rootDrawings.map((drawing) => (
                     <DrawingRow
@@ -630,8 +795,11 @@ export default function Sidebar({
 
         {/* Status bar */}
         <div className="sidebar-status">
-          <span className={`status-dot${saving ? " saving" : ""}`} />
-          {saving ? "Saving…" : "All changes saved"}
+          <div className="status-left">
+            <span className={`status-dot${saving ? " saving" : ""}`} />
+            <span>{saving ? "Saving…" : "All changes saved"}</span>
+          </div>
+          <span className="status-badge">IndexedDB</span>
         </div>
       </aside>
 
@@ -658,6 +826,18 @@ export default function Sidebar({
           onClose={() => setModal(null)}
           onSubmit={handleModalSubmit}
         />
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="sidebar-toast" onClick={() => setToast(null)}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span>{toast}</span>
+        </div>
       )}
     </>
   );

@@ -1,135 +1,252 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import "@excalidraw/excalidraw/index.css";
 import { Excalidraw as Draflo } from "@excalidraw/excalidraw";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawImperativeAPI, BinaryFiles } from "@excalidraw/excalidraw/types";
 import Sidebar from "./Sidebar";
 import "./Sidebar.css";
-import { type Drawing, saveDrawing, getDrawing } from "./db";
+import {
+  type Drawing,
+  type GlobalSettings,
+  saveDrawing,
+  getDrawing,
+  getGlobalSettings,
+  saveGlobalSettings,
+  extractToolAndPenSettings,
+} from "./db";
 
 // Auto-save debounce delay in milliseconds
-const AUTOSAVE_DELAY = 1500;
+const AUTOSAVE_DELAY = 1000;
+
+interface SceneSnapshot {
+  elements: unknown[];
+  appState: Record<string, unknown>;
+  files: Record<string, unknown>;
+}
 
 function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeDrawing, setActiveDrawing] = useState<Drawing | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Theme state: "dark" or "light"
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    try {
+      const saved = localStorage.getItem("draflo-theme");
+      if (saved === "light" || saved === "dark") return saved;
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+
   const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeDrawingRef = useRef<Drawing | null>(null);
+  const themeRef = useRef<"dark" | "light">(theme);
 
-  // Keep ref in sync so the autosave closure always has the latest drawing id
+  // Global settings ref (tool, pen, colors, stroke, theme, lastActiveDrawingId)
+  const globalSettingsRef = useRef<GlobalSettings>({});
+
+  // Store latest scene changes per drawing ID in memory immediately (0ms lag)
+  const latestScenesRef = useRef<Map<string, SceneSnapshot>>(new Map());
+
+  // Keep refs in sync
   useEffect(() => {
     activeDrawingRef.current = activeDrawing;
   }, [activeDrawing]);
 
-  // ─── Auto-save logic ───────────────────────────────────────────────────────
+  useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
 
-  const scheduleAutosave = useCallback(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+  // Sync theme with DOM, localStorage, and meta color-scheme
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute("data-theme", theme);
+      localStorage.setItem("draflo-theme", theme);
+      const meta = document.querySelector('meta[name="color-scheme"]');
+      if (meta) meta.setAttribute("content", theme);
+    } catch (e) {
+      console.error("Failed to update theme storage", e);
+    }
+  }, [theme]);
 
-    saveTimerRef.current = setTimeout(async () => {
-      const drawing = activeDrawingRef.current;
-      const api = excalidrawApiRef.current;
-      if (!drawing || !api) return;
-
-      setSaving(true);
+  // ─── Load Global Settings from IndexedDB on startup ───────────────────────
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
       try {
-        const elements = api.getSceneElements();
-        const appState = api.getAppState();
-        const files = api.getFiles();
+        const settings = await getGlobalSettings();
+        if (!mounted) return;
+        globalSettingsRef.current = settings;
 
-        await saveDrawing(
-          drawing.id,
-          elements as unknown[],
-          {
-            viewBackgroundColor: appState.viewBackgroundColor,
-            gridSize: appState.gridSize,
-            zoom: appState.zoom,
-            scrollX: appState.scrollX,
-            scrollY: appState.scrollY,
-          } as Record<string, unknown>,
-          files as unknown as Record<string, unknown>,
-        );
-      } finally {
-        setSaving(false);
+        // 1. Restore global theme
+        if (settings.theme === "dark" || settings.theme === "light") {
+          setTheme(settings.theme);
+        }
+
+        // 2. Restore last active drawing so user starts where they left off
+        if (settings.lastActiveDrawingId) {
+          const drawing = await getDrawing(settings.lastActiveDrawingId);
+          if (mounted && drawing) {
+            setActiveDrawing(drawing);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load global settings from IndexedDB:", err);
       }
-    }, AUTOSAVE_DELAY);
+    })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  // ─── When user picks a drawing from sidebar ────────────────────────────────
+  const handleToggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      globalSettingsRef.current = {
+        ...globalSettingsRef.current,
+        theme: next,
+      };
+      saveGlobalSettings({ theme: next }).catch(console.error);
+      return next;
+    });
+  }, []);
 
-  const handleSelectDrawing = useCallback(
-    async (drawing: Drawing) => {
-      // Save current drawing immediately before switching
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-        const current = activeDrawingRef.current;
-        const api = excalidrawApiRef.current;
-        if (current && api) {
-          const elements = api.getSceneElements();
-          const appState = api.getAppState();
-          const files = api.getFiles();
-          await saveDrawing(
-            current.id,
-            elements as unknown[],
-            {
-              viewBackgroundColor: appState.viewBackgroundColor,
-              gridSize: appState.gridSize,
-              zoom: appState.zoom,
-              scrollX: appState.scrollX,
-              scrollY: appState.scrollY,
-            } as Record<string, unknown>,
-            files as unknown as Record<string, unknown>,
-          );
+  // ─── Flush pending saves to IndexedDB ──────────────────────────────────────
+
+  const flushPendingSaves = useCallback(async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    const pending = Array.from(latestScenesRef.current.entries());
+    setSaving(true);
+    try {
+      for (const [id, scene] of pending) {
+        await saveDrawing(id, scene.elements, scene.appState, scene.files);
+      }
+      latestScenesRef.current.clear();
+
+      if (globalSettingsRef.current && Object.keys(globalSettingsRef.current).length > 0) {
+        await saveGlobalSettings(globalSettingsRef.current);
+      }
+    } catch (err) {
+      console.error("Failed to flush pending saves to IndexedDB:", err);
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  // ─── Scene change handler from Excalidraw ──────────────────────────────────
+
+  const handleSceneChange = useCallback(
+    (
+      drawingId: string,
+      elements: readonly unknown[],
+      appState: Record<string, unknown>,
+      files: Record<string, unknown>,
+    ) => {
+      const drawingTheme = (appState.theme as "dark" | "light") || themeRef.current;
+      const toolAndPenSettings = extractToolAndPenSettings(appState);
+
+      // Track global editor settings (tool, pen mode, stroke color, stroke width, etc.)
+      globalSettingsRef.current = {
+        ...globalSettingsRef.current,
+        ...toolAndPenSettings,
+        theme: drawingTheme,
+        lastActiveDrawingId: drawingId,
+      };
+
+      // 1. Store scene in memory immediately for this exact drawing ID with theme included
+      latestScenesRef.current.set(drawingId, {
+        elements: elements as unknown[],
+        appState: {
+          viewBackgroundColor: appState.viewBackgroundColor,
+          gridSize: appState.gridSize,
+          zoom: appState.zoom,
+          scrollX: appState.scrollX,
+          scrollY: appState.scrollY,
+          theme: drawingTheme,
+        },
+        files: files || {},
+      });
+
+      // If user switched theme within Excalidraw canvas menu, synchronize our app theme!
+      if (appState.theme && (appState.theme === "dark" || appState.theme === "light")) {
+        if (appState.theme !== themeRef.current) {
+          setTheme(appState.theme as "dark" | "light");
         }
       }
 
-      // Reload fresh from DB to get latest saved state
-      const fresh = await getDrawing(drawing.id);
-      setActiveDrawing(fresh ?? drawing);
+      // 2. Schedule debounced save to IndexedDB (drawing + global settings)
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      setSaving(true);
+
+      saveTimerRef.current = setTimeout(async () => {
+        const scene = latestScenesRef.current.get(drawingId);
+        try {
+          if (scene) {
+            await saveDrawing(drawingId, scene.elements, scene.appState, scene.files);
+            latestScenesRef.current.delete(drawingId);
+          }
+          await saveGlobalSettings({
+            ...toolAndPenSettings,
+            theme: drawingTheme,
+            lastActiveDrawingId: drawingId,
+          });
+        } catch (err) {
+          console.error("Auto-save failed:", err);
+        } finally {
+          setSaving(false);
+        }
+      }, AUTOSAVE_DELAY);
     },
     [],
   );
 
-  // ─── Restore scene when activeDrawing changes ──────────────────────────────
+  // ─── Switch / select drawing ───────────────────────────────────────────────
+
+  const handleSelectDrawing = useCallback(
+    async (drawing: Drawing) => {
+      // 1. Before switching away, immediately persist any pending work
+      await flushPendingSaves();
+
+      // 2. Reload fresh drawing state directly from IndexedDB
+      const fresh = await getDrawing(drawing.id);
+      const target = fresh ?? drawing;
+      setActiveDrawing(target);
+
+      // 3. Persist last active drawing ID globally in IndexedDB
+      globalSettingsRef.current = {
+        ...globalSettingsRef.current,
+        lastActiveDrawingId: target.id,
+      };
+      saveGlobalSettings({ lastActiveDrawingId: target.id }).catch(console.error);
+
+      // 4. If drawing has a stored theme preference, adopt it
+      if (target.appState?.theme && (target.appState.theme === "dark" || target.appState.theme === "light")) {
+        setTheme(target.appState.theme as "dark" | "light");
+      }
+    },
+    [flushPendingSaves],
+  );
+
+  const handleActiveDrawingDeleted = useCallback(() => {
+    setActiveDrawing(null);
+    globalSettingsRef.current = {
+      ...globalSettingsRef.current,
+      lastActiveDrawingId: null,
+    };
+    saveGlobalSettings({ lastActiveDrawingId: null }).catch(console.error);
+  }, []);
+
+  // ─── Keyboard shortcuts (Ctrl+S, Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y) ─────────────
 
   useEffect(() => {
-    const api = excalidrawApiRef.current;
-    if (!api || !activeDrawing) return;
-
-    api.updateScene({
-      elements: (activeDrawing.elements as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["elements"]) ?? [],
-      appState: activeDrawing.appState as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["appState"],
-    });
-
-    if (activeDrawing.files && Object.keys(activeDrawing.files).length > 0) {
-      api.addFiles(Object.values(activeDrawing.files) as Parameters<ExcalidrawImperativeAPI["addFiles"]>[0]);
-    }
-  }, [activeDrawing]);
-
-  // ─── Keyboard shortcuts ────────────────────────────────────────────────────
-  //
-  // WHY UNDO BREAKS even with handleKeyboardGlobally:
-  //   Excalidraw's onKeyDown has this guard (confirmed in source):
-  //
-  //     if (isWritableElement(event.target) && event.key !== KEYS.ESCAPE) {
-  //       return; // bails out — skips undo, redo, everything
-  //     }
-  //
-  //   When any sidebar <input> (search box, rename field) has focus,
-  //   event.target IS that input → isWritableElement returns true → undo skipped.
-  //   Redo seemed to "work" only when focus happened to be elsewhere already.
-  //
-  // FIX (capture phase, highest priority):
-  //   Intercept Ctrl+Z/Shift+Z BEFORE Excalidraw's document listener fires.
-  //   If event.target is a writable sidebar element, blur it and re-dispatch
-  //   the keydown on the canvas — now event.target is the canvas (not writable)
-  //   so Excalidraw's guard passes and undo/redo execute normally.
-
-  useEffect(() => {
-    const isWritable = (el: EventTarget | null): el is HTMLElement => {
+    const isEditable = (el: EventTarget | null): boolean => {
       if (!el || !(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
       return (
@@ -145,109 +262,110 @@ function App() {
       if (!ctrl) return;
 
       // ── Ctrl+S: instant save ──────────────────────────────────────────────
-      if (e.key === "s") {
-        if (isWritable(e.target)) return; // let browser handle in sidebar inputs
+      if (e.key === "s" || e.key === "S") {
+        if (isEditable(e.target)) return;
         e.preventDefault();
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        const drawing = activeDrawingRef.current;
-        const api = excalidrawApiRef.current;
-        if (!drawing || !api) return;
-        setSaving(true);
-        const elements = api.getSceneElements();
-        const appState = api.getAppState();
-        const files = api.getFiles();
-        saveDrawing(
-          drawing.id,
-          elements as unknown[],
-          {
-            viewBackgroundColor: appState.viewBackgroundColor,
-            gridSize: appState.gridSize,
-          } as Record<string, unknown>,
-          files as unknown as Record<string, unknown>,
-        ).finally(() => setSaving(false));
+        flushPendingSaves();
         return;
       }
 
-      // ── Ctrl+Z (undo) / Ctrl+Shift+Z or Ctrl+Y (redo) ────────────────────
-      const isUndoRedo =
-        (e.key === "z" && !e.shiftKey) ||  // Ctrl+Z
-        (e.key === "z" && e.shiftKey) ||    // Ctrl+Shift+Z
-        e.key === "y";                       // Ctrl+Y (Windows redo)
-      if (!isUndoRedo) return;
+      // If user is actively typing in an input/textarea, let native undo work there
+      if (isEditable(e.target)) return;
 
-      // Only intervene when a sidebar input has stolen focus.
-      // If event.target is already the canvas or body, Excalidraw handles it.
-      if (!isWritable(e.target)) return;
+      const keyLower = e.key.toLowerCase();
+      const isZ = keyLower === "z" || e.code === "KeyZ";
+      const isY = keyLower === "y" || e.code === "KeyY";
 
-      // Sidebar input has focus → Excalidraw would bail. Intercept.
-      e.preventDefault();
-      e.stopImmediatePropagation();
+      // ── Ctrl+Z: Undo ──────────────────────────────────────────────────────
+      if (isZ && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
 
-      // Blur the input so it no longer appears as the active element
-      (e.target as HTMLElement).blur();
-
-      // Re-dispatch on the Excalidraw canvas.
-      // event.target will now be the canvas (not writable) so the guard passes.
-      const canvasEl = document.querySelector<HTMLElement>(".excalidraw canvas");
-      if (canvasEl) {
-        canvasEl.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: e.key,
-            code: e.code,
-            ctrlKey: e.ctrlKey,
-            metaKey: e.metaKey,
-            shiftKey: e.shiftKey,
-            altKey: e.altKey,
-            bubbles: true,
-            cancelable: true,
-          }),
+        const undoBtn = document.querySelector<HTMLButtonElement>(
+          '.undo-button-container button, [data-testid="undo-button"], button[aria-label="Undo"], button[title*="Undo"], button[title*="undo"]'
         );
+        if (undoBtn && !undoBtn.disabled) {
+          undoBtn.click();
+        }
+        return;
+      }
+
+      // ── Ctrl+Shift+Z / Ctrl+Y: Redo ───────────────────────────────────────
+      if ((isZ && e.shiftKey) || isY) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const redoBtn = document.querySelector<HTMLButtonElement>(
+          '.redo-button-container button, [data-testid="button-redo"], button[aria-label="Redo"], button[title*="Redo"], button[title*="redo"]'
+        );
+        if (redoBtn && !redoBtn.disabled) {
+          redoBtn.click();
+        }
+        return;
       }
     };
 
-    // Capture phase: fires before Excalidraw's document-level listener
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, []);
+  }, [flushPendingSaves]);
+
+  // Ensure any unsaved changes are written before the user leaves/refreshes the tab
+  useEffect(() => {
+    const beforeUnloadHandler = () => {
+      flushPendingSaves();
+    };
+    window.addEventListener("beforeunload", beforeUnloadHandler);
+    return () => window.removeEventListener("beforeunload", beforeUnloadHandler);
+  }, [flushPendingSaves]);
 
   return (
     <div className="app-wrapper">
       <Sidebar
         activeDrawingId={activeDrawing?.id ?? null}
         onSelectDrawing={handleSelectDrawing}
+        onActiveDrawingDeleted={handleActiveDrawingDeleted}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         saving={saving}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
 
       <div className="canvas-area">
         {activeDrawing ? (
           <Draflo
             key={activeDrawing.id}
-            // ✅ This is the fix: Excalidraw listens for keyboard events on
-            // `document` globally instead of only when its canvas has focus.
-            // Ctrl+Z, Ctrl+Shift+Z, and all other shortcuts now work even when
-            // the sidebar panel is focused.
+            theme={theme}
+            initialData={{
+              elements: (activeDrawing.elements as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["elements"]) || [],
+              appState: {
+                ...(activeDrawing.appState || {}),
+                isLoading: false,
+                theme,
+                // Overlay global tool and pen settings so you always continue where you left off
+                ...extractToolAndPenSettings(globalSettingsRef.current as Record<string, unknown>),
+              } as unknown as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["appState"],
+              files: (activeDrawing.files as unknown as BinaryFiles) || {},
+            }}
             handleKeyboardGlobally
             excalidrawAPI={(api) => {
               excalidrawApiRef.current = api;
-              // Restore scene after API is ready
-              setTimeout(() => {
-                api.updateScene({
-                  elements: (activeDrawing.elements as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["elements"]) ?? [],
-                  appState: activeDrawing.appState as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]["appState"],
-                });
-                if (activeDrawing.files && Object.keys(activeDrawing.files).length > 0) {
-                  api.addFiles(Object.values(activeDrawing.files) as Parameters<ExcalidrawImperativeAPI["addFiles"]>[0]);
-                }
-              }, 0);
             }}
-            onChange={scheduleAutosave}
+            onChange={(elements, appState, files) => {
+              handleSceneChange(
+                activeDrawing.id,
+                elements,
+                appState as unknown as Record<string, unknown>,
+                files as unknown as Record<string, unknown>,
+              );
+            }}
           />
         ) : (
-          <WelcomeScreen onNewDrawing={() => {
-            window.dispatchEvent(new CustomEvent("draflo:new-drawing"));
-          }} />
+          <WelcomeScreen
+            onNewDrawing={() => {
+              window.dispatchEvent(new CustomEvent("draflo:new-drawing"));
+            }}
+          />
         )}
       </div>
     </div>
@@ -264,43 +382,27 @@ function WelcomeScreen({ onNewDrawing }: { onNewDrawing: () => void }) {
   }, [onNewDrawing]);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100%",
-        gap: 16,
-        background: "#16171d",
-        color: "#6b7280",
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#3a3c4a" strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 20h9" />
-        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-      </svg>
-      <div style={{ fontSize: 18, color: "#c8cad8", fontWeight: 600 }}>Draflo</div>
-      <div style={{ fontSize: 13 }}>Select a drawing from the sidebar, or create a new one.</div>
-      <button
-        onClick={onNewDrawing}
-        style={{
-          marginTop: 8,
-          background: "#7c3aed",
-          color: "#fff",
-          border: "none",
-          borderRadius: 8,
-          padding: "9px 20px",
-          fontSize: 13,
-          cursor: "pointer",
-          fontWeight: 500,
-        }}
-      >
+    <div className="welcome-screen">
+      <div className="welcome-icon-box">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.75}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+        </svg>
+      </div>
+      <div className="welcome-title">Draflo</div>
+      <div className="welcome-subtitle">Select a drawing from the sidebar, or create a new one to start sketching.</div>
+      <button className="welcome-btn" onClick={onNewDrawing}>
         + New Drawing
       </button>
-      <div style={{ fontSize: 11, color: "#4b5563", marginTop: 4 }}>
-        Tip: Press <kbd style={{ background: "#2b2d3a", padding: "1px 5px", borderRadius: 4, color: "#9ca3b0" }}>Ctrl+S</kbd> to save instantly
+      <div className="welcome-tip">
+        Tip: Press <kbd className="welcome-kbd">Ctrl+S</kbd> to save instantly to IndexedDB
       </div>
     </div>
   );
